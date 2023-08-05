@@ -1,0 +1,107 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <signal.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+
+#define SHARED_MEMORY_SIZE 4096
+
+void sigintHandler(int signum);
+
+int main() {
+    signal(SIGINT, sigintHandler);
+
+    int shmfd = shm_open("/shared_memory", O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
+    if (shmfd == -1) {
+        perror("shm_open");
+        exit(EXIT_FAILURE);
+    }
+
+    if (ftruncate(shmfd, SHARED_MEMORY_SIZE) == -1) {
+        perror("ftruncate");
+        exit(EXIT_FAILURE);
+    }
+
+    void* shared_memory = mmap(NULL, SHARED_MEMORY_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shmfd, 0);
+    if (shared_memory == MAP_FAILED) {
+        perror("mmap");
+        exit(EXIT_FAILURE);
+    }
+
+    int* data = (int*)shared_memory;
+    int num_sets_processed = 0;
+
+    while (1) {
+        int num_numbers = rand() % 10 + 1; 
+        data[0] = num_numbers; 
+
+        for (int i = 1; i <= num_numbers; i++) {
+            data[i] = rand() % 100; 
+        }
+
+        int pid = fork();
+        if (pid == -1) {
+            perror("fork");
+            exit(EXIT_FAILURE);
+        } else if (pid == 0) {
+            int max = data[1];
+            int min = data[1];
+
+            for (int i = 2; i <= num_numbers; i++) {
+                if (data[i] > max) {
+                    max = data[i];
+                }
+                if (data[i] < min) {
+                    min = data[i];
+                }
+            }
+
+            data[0] = max;
+            data[1] = min;
+
+            exit(EXIT_SUCCESS);
+        } else {
+            int status;
+            wait(&status);
+
+            if (WIFSIGNALED(status) && WTERMSIG(status) == SIGINT) {
+                break; 
+            }
+
+            int max = data[0];
+            int min = data[1];
+
+            printf("Set %d: ", num_sets_processed + 1);
+            for (int i = 1; i <= num_numbers; i++) {
+                printf("%d ", data[i]);
+            }
+            printf("Max: %d Min: %d\n", max, min);
+
+            num_sets_processed++;
+        }
+    }
+
+    if (munmap(shared_memory, SHARED_MEMORY_SIZE) == -1) {
+        perror("munmap");
+    }
+
+    if (close(shmfd) == -1) {
+        perror("close");
+    }
+
+    if (shm_unlink("/shared_memory") == -1) {
+        perror("shm_unlink");
+    }
+
+    printf("Processed %d sets of data\n", num_sets_processed);
+
+    return 0;
+}
+
+void sigintHandler(int signum) {
+    printf("\nReceived SIGINT. Exiting...\n");
+}
